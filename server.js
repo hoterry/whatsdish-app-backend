@@ -4,12 +4,9 @@ const dotenv = require('dotenv');
 const cors = require('cors');
 const axios = require('axios');
 const bodyParser = require('body-parser');
-
 dotenv.config();
-
 const isDev = process.env.NODE_ENV === 'development';
 const PORT = process.env.PORT || 5000;
-
 const SUPABASE_URL = isDev ? process.env.DEV_SUPABASE_URL : process.env.PROD_SUPABASE_URL;
 const SUPABASE_ANON_KEY = isDev ? process.env.DEV_SUPABASE_ANON_KEY : process.env.PROD_SUPABASE_ANON_KEY;
 const WHATS_DISH_BASE_URL = isDev ? process.env.DEV_WHATS_DISH_BASE_URL : process.env.PROD_WHATS_DISH_BASE_URL;
@@ -20,12 +17,9 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-
 const app = express();
 app.use(express.json());
 app.use(cors());
-
 console.log(`Server is starting...`);
 console.log(`Environment: ${isDev ? 'development' : 'production'}`);
 
@@ -86,6 +80,30 @@ app.get('/restaurant', async (req, res) => {
   }
 });
 
+app.get('/api/restaurants', async (req, res) => {
+  try {
+    // Fetch restaurant data from WhatsDish API
+    const response = await axios.get(`${WHATS_DISH_BASE_URL}/api/rn/merchants`);
+    
+    if (response.status !== 200) {
+      return res.status(response.status).json({ message: 'Failed to fetch restaurants' });
+    }
+
+    // Log the fetched data (Only in DEV mode)
+    if (isDev) {
+      console.log('[DEV LOG] Fetched restaurant data:', response.data);
+    }
+
+    // Return the data to the frontend
+    res.json(response.data);
+  } catch (err) {
+    // Handle any errors
+    console.error('[DEV ERROR] Error fetching restaurant data:', err);
+    res.status(500).json({ message: 'Internal server error while fetching restaurant data' });
+  }
+});
+
+
 app.post('/api/send-code', async (req, res) => {
   const phoneNumber = req.body.phoneNumber || req.body.phone;
   if (!phoneNumber) {
@@ -141,28 +159,6 @@ app.post('/api/verify-code', async (req, res) => {
   }
 });
 
-app.get('/api/profile', async (req, res) => {
-  try {
-    const token = req.headers.authorization;
-    if (!token) {
-      if (isDev) console.log('[DEV ERROR] Missing token');
-      return res.status(401).json({ error: 'Missing token' });
-    }
-
-    if (isDev) console.log('[DEV LOG] Token received:', token);
-
-    const response = await axios.get(`${WHATS_DISH_BASE_URL}/api/rn/profile`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-
-    if (isDev) console.log('[DEV LOG] Profile Data:', response.data);
-    res.status(200).json(response.data);
-  } catch (err) {
-    if (isDev) console.error('[DEV ERROR] Failed to fetch profile:', err);
-    res.status(500).json({ error: 'Failed to fetch profile' });
-  }
-});
-
 app.get('/api/user/profile', async (req, res) => {
   try {
     const token = req.headers['authorization']?.split(' ')[1];
@@ -206,11 +202,14 @@ app.get('/fetch-menu', async (req, res) => {
 
     if (isDev) console.log('[DEV LOG] Fetching menu for restaurantId:', restaurantId);
 
-    const token = await getToken();
+    const token = req.headers['authorization']?.split(' ')[1];
+
     if (!token) {
       if (isDev) console.log('[DEV ERROR] Unauthorized: Missing token');
       return res.status(401).json({ error: 'Unauthorized: Missing token' });
     }
+
+    if (isDev) console.log('[DEV LOG] Token received:', token);
 
     const apiUrl = `${WHATS_DISH_BASE_URL}/api/rn/merchants/${restaurantId}`;
     if (isDev) console.log('[DEV LOG] API URL:', apiUrl);
@@ -231,6 +230,101 @@ app.get('/fetch-menu', async (req, res) => {
   } catch (error) {
     if (isDev) console.error('[DEV ERROR] Error fetching menu:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/profile/payment-methods', async (req, res) => {
+  try {
+    const token = req.headers['authorization']?.split(' ')[1];
+
+    if (!token) {
+      if (isDev) console.log('[DEV ERROR] Token is required');
+      return res.status(401).json({ message: 'Token is required' });
+    }
+
+    const response = await fetch(`${WHATS_DISH_BASE_URL}/api/profile/payment-methods`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return res.status(response.status).json(data);
+    }
+
+    if (isDev) console.log('[DEV LOG] Payment Methods Data:', data);
+
+    return res.json(data);
+  } catch (error) {
+    if (isDev) console.error('[DEV ERROR] Internal server error:', error);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+app.post('/api/payments/m/cof', async (req, res) => {
+  try {
+    const token = req.headers['authorization']?.split(' ')[1];
+    const cardInfo = req.body;
+
+    if (!token) {
+      return res.status(401).json({ message: 'Token is required' });
+    }
+
+    if (!cardInfo) {
+      return res.status(400).json({ message: 'Card information is required' });
+    }
+
+    const response = await fetch(`${WHATS_DISH_BASE_URL}/api/payments/m/cof`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(cardInfo),
+    });
+
+    const newCard = await response.json();
+    if (!response.ok) {
+      return res.status(response.status).json(newCard);
+    }
+
+    return res.json(newCard);
+  } catch (error) {
+    console.error('Error saving card:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+app.delete('/api/profile/payment-methods/:cardId', async (req, res) => {
+  try {
+    const token = req.headers['authorization']?.split(' ')[1];
+    const { cardId } = req.params;
+
+    if (!token) {
+      return res.status(401).json({ message: 'Token is required' });
+    }
+
+    const response = await fetch(`${WHATS_DISH_BASE_URL}/api/profile/payment-methods/${cardId}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      return res.status(response.status).json(result);
+    }
+
+    return res.json(result);
+  } catch (error) {
+    console.error('Error removing card:', error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 });
 
