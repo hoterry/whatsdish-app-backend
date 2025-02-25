@@ -328,6 +328,38 @@ app.delete('/api/profile/payment-methods/:cardId', async (req, res) => {
   }
 });
 
+app.get('/api/restaurants/:restaurantId', async (req, res) => {
+  try {
+    const token = req.headers['authorization']?.split(' ')[1];
+    const { restaurantId } = req.params;
+
+    if (!token) {
+      return res.status(401).json({ message: 'Token is required' });
+    }
+
+    console.log(`[Backend Log] Restaurant ID received: ${restaurantId}`);
+
+    const url = `${WHATS_DISH_BASE_URL}/api/rn/merchants/${restaurantId}`;
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      return res.status(response.status).json(data);
+    }
+
+    return res.json(data);
+  } catch (error) {
+    console.error('Error fetching restaurant details:', error);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
