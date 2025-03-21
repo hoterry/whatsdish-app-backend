@@ -1,5 +1,4 @@
 const express = require('express');
-const { createClient } = require('@supabase/supabase-js');
 const dotenv = require('dotenv');
 const cors = require('cors');
 const axios = require('axios');
@@ -11,14 +10,10 @@ dotenv.config();
 // Environment configuration
 const isDev = process.env.NODE_ENV === 'development';
 const PORT = process.env.PORT || 5000;
-const SUPABASE_URL = isDev ? process.env.DEV_SUPABASE_URL : process.env.PROD_SUPABASE_URL;
-const SUPABASE_ANON_KEY = isDev ? process.env.DEV_SUPABASE_ANON_KEY : process.env.PROD_SUPABASE_ANON_KEY;
 const WHATS_DISH_BASE_URL = isDev ? process.env.DEV_WHATS_DISH_BASE_URL : process.env.PROD_WHATS_DISH_BASE_URL;
 
 // Validate required environment variables
 const requiredEnvVars = [
-  { name: 'SUPABASE_URL', value: SUPABASE_URL },
-  { name: 'SUPABASE_ANON_KEY', value: SUPABASE_ANON_KEY },
   { name: 'WHATS_DISH_BASE_URL', value: WHATS_DISH_BASE_URL }
 ];
 
@@ -28,9 +23,6 @@ if (missingVars.length > 0) {
   missingVars.forEach(v => console.error(`- ${v.name} is missing`));
   process.exit(1);
 }
-
-// Initialize Supabase client
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Initialize Express app
 const app = express();
@@ -70,7 +62,6 @@ console.log(`Environment: ${isDev ? 'development' : 'production'}`);
 
 if (isDev) {
   log('Full API configuration:');
-  log(`- SUPABASE_URL: ${SUPABASE_URL}`);
   log(`- WHATS_DISH_BASE_URL: ${WHATS_DISH_BASE_URL}`);
 }
 
@@ -92,49 +83,6 @@ function isValidUrl(string) {
 }
 
 // Routes
-app.get('/menu', async (req, res, next) => {
-  try {
-    const { restaurant_id } = req.query;
-    if (!restaurant_id) {
-      return res.status(400).json({ error: 'Missing restaurant_id parameter' });
-    }
-    
-    log(`Fetching menu for restaurant_id: ${restaurant_id}`);
-
-    const { data, error } = await supabase
-      .from('menu_items')
-      .select(`*,modifier_groups (*,modifier_items (id,name,name_zh,price)),option_groups (*,options (id, name,name_zh,price))`)
-      .eq('restaurant_id', restaurant_id);
-    
-    if (error) {
-      logError(`Supabase Error: ${error.message}`, error);
-      return res.status(500).json({ error: error.message });
-    }
-
-    log(`Menu Data fetched successfully for restaurant_id: ${restaurant_id}`);
-    res.status(200).json(data);
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.get('/restaurant', async (req, res, next) => {
-  try {
-    log('Fetching all restaurants');
-    const { data, error } = await supabase.from('restaurants').select('*');
-    
-    if (error) {
-      logError(`Supabase Error: ${error.message}`, error);
-      return res.status(400).json({ error: error.message });
-    }
-
-    log('Restaurant Data fetched successfully');
-    res.json(data);
-  } catch (err) {
-    next(err);
-  }
-});
-
 app.get('/api/restaurants', async (req, res, next) => {
   try {
     log('Fetching restaurant data from WhatsDish API');
