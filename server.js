@@ -3,46 +3,103 @@ const { createClient } = require('@supabase/supabase-js');
 const dotenv = require('dotenv');
 const cors = require('cors');
 const axios = require('axios');
-const bodyParser = require('body-parser');
+const { URL } = require('url');
+
+// Load environment variables
 dotenv.config();
+
+// Environment configuration
 const isDev = process.env.NODE_ENV === 'development';
 const PORT = process.env.PORT || 5000;
 const SUPABASE_URL = isDev ? process.env.DEV_SUPABASE_URL : process.env.PROD_SUPABASE_URL;
 const SUPABASE_ANON_KEY = isDev ? process.env.DEV_SUPABASE_ANON_KEY : process.env.PROD_SUPABASE_ANON_KEY;
 const WHATS_DISH_BASE_URL = isDev ? process.env.DEV_WHATS_DISH_BASE_URL : process.env.PROD_WHATS_DISH_BASE_URL;
 
-if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  console.error('❌ ERROR: Missing Supabase credentials!');
+// Validate required environment variables
+const requiredEnvVars = [
+  { name: 'SUPABASE_URL', value: SUPABASE_URL },
+  { name: 'SUPABASE_ANON_KEY', value: SUPABASE_ANON_KEY },
+  { name: 'WHATS_DISH_BASE_URL', value: WHATS_DISH_BASE_URL }
+];
+
+const missingVars = requiredEnvVars.filter(v => !v.value);
+if (missingVars.length > 0) {
+  console.error('ERROR: Missing required environment variables!');
+  missingVars.forEach(v => console.error(`- ${v.name} is missing`));
   process.exit(1);
 }
 
+// Initialize Supabase client
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// Initialize Express app
 const app = express();
+
+// Middleware
 app.use(express.json());
 app.use(cors());
+
+// Logging helpers
+function log(message, data) {
+  if (isDev) {
+    if (data) {
+      console.log(`[DEV LOG] ${message}`, data);
+    } else {
+      console.log(`[DEV LOG] ${message}`);
+    }
+  }
+}
+
+function logError(message, error) {
+  if (isDev) {
+    console.error(`[DEV ERROR] ${message}`, error);
+  }
+}
+
+// Security helper for masking tokens in logs
+function maskToken(token) {
+  if (!token) return 'undefined';
+  return token.length > 8 ? 
+    `${token.substring(0, 4)}...${token.substring(token.length - 4)}` : 
+    '****';
+}
+
+// Startup message
 console.log(`Server is starting...`);
 console.log(`Environment: ${isDev ? 'development' : 'production'}`);
 
 if (isDev) {
-  console.log('[DEV MODE] Full API configuration:');
-  console.log(`- SUPABASE_URL: ${SUPABASE_URL}`);
-  console.log(`- WHATS_DISH_BASE_URL: ${WHATS_DISH_BASE_URL}`);
+  log('Full API configuration:');
+  log(`- SUPABASE_URL: ${SUPABASE_URL}`);
+  log(`- WHATS_DISH_BASE_URL: ${WHATS_DISH_BASE_URL}`);
 }
 
-function log(message) {
-  if (isDev) {
-    console.log(message);
+// Error handling middleware
+const errorHandler = (err, req, res, next) => {
+  const statusCode = err.statusCode || 500;
+  logError(`${req.method} ${req.path} - ${err.message}`, err);
+  res.status(statusCode).json({ error: err.message });
+};
+
+// Helper function to validate URL
+function isValidUrl(string) {
+  try {
+    new URL(string);
+    return true;
+  } catch (_) {
+    return false;
   }
 }
 
-app.get('/menu', async (req, res) => {
+// Routes
+app.get('/menu', async (req, res, next) => {
   try {
     const { restaurant_id } = req.query;
     if (!restaurant_id) {
       return res.status(400).json({ error: 'Missing restaurant_id parameter' });
     }
     
-    if (isDev) console.log(`[DEV LOG] Fetching menu for restaurant_id: ${restaurant_id}`);
+    log(`Fetching menu for restaurant_id: ${restaurant_id}`);
 
     const { data, error } = await supabase
       .from('menu_items')
@@ -50,317 +107,355 @@ app.get('/menu', async (req, res) => {
       .eq('restaurant_id', restaurant_id);
     
     if (error) {
-      if (isDev) console.error(`[DEV ERROR] Supabase Error: ${error.message}`);
+      logError(`Supabase Error: ${error.message}`, error);
       return res.status(500).json({ error: error.message });
     }
 
-    if (isDev) console.log(`[DEV LOG] Menu Data:`, data);
+    log(`Menu Data fetched successfully for restaurant_id: ${restaurant_id}`);
     res.status(200).json(data);
   } catch (err) {
-    if (isDev) console.error(`[DEV ERROR] Server Error: ${err.message}`);
-    res.status(500).json({ error: 'Server Error' });
+    next(err);
   }
 });
 
-app.get('/restaurant', async (req, res) => {
+app.get('/restaurant', async (req, res, next) => {
   try {
-    if (isDev) console.log(`[DEV LOG] Fetching all restaurants`);
+    log('Fetching all restaurants');
     const { data, error } = await supabase.from('restaurants').select('*');
     
     if (error) {
-      if (isDev) console.error(`[DEV ERROR] Supabase Error: ${error.message}`);
+      logError(`Supabase Error: ${error.message}`, error);
       return res.status(400).json({ error: error.message });
     }
 
-    if (isDev) console.log(`[DEV LOG] Restaurant Data:`, data);
+    log('Restaurant Data fetched successfully');
     res.json(data);
   } catch (err) {
-    if (isDev) console.error(`[DEV ERROR] Server error: ${err.message}`);
-    res.status(500).json({ error: 'Server error' });
+    next(err);
   }
 });
 
-app.get('/api/restaurants', async (req, res) => {
+app.get('/api/restaurants', async (req, res, next) => {
   try {
-    // Fetch restaurant data from WhatsDish API
-    const response = await axios.get(`${WHATS_DISH_BASE_URL}/api/rn/merchants`);
+    log('Fetching restaurant data from WhatsDish API');
+    
+    const response = await axios.get(`${WHATS_DISH_BASE_URL}/api/rn/merchants`, {
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      timeout: 10000
+    });
     
     if (response.status !== 200) {
-      return res.status(response.status).json({ message: 'Failed to fetch restaurants' });
+      return res.status(response.status).json({ error: 'Failed to fetch restaurants' });
     }
 
-    // Log the fetched data (Only in DEV mode)
-    if (isDev) {
-      console.log('[DEV LOG] Fetched restaurant data:', response.data);
-    }
-
-    // Return the data to the frontend
+    log('Fetched restaurant data successfully');
     res.json(response.data);
   } catch (err) {
-    // Handle any errors
-    console.error('[DEV ERROR] Error fetching restaurant data:', err);
-    res.status(500).json({ message: 'Internal server error while fetching restaurant data' });
+    logError('Error fetching restaurant data', err);
+    res.status(500).json({ error: 'Internal server error while fetching restaurant data' });
   }
 });
 
-
-app.post('/api/send-code', async (req, res) => {
-  const phoneNumber = req.body.phoneNumber || req.body.phone;
-  if (!phoneNumber) {
-    return res.status(400).json({ error: 'Phone number is required.' });
-  }
-
-  if (isDev) console.log(`[DEV LOG] Sending verification code to: ${phoneNumber}`);
-
+app.post('/api/send-code', async (req, res, next) => {
   try {
-    await axios.post(`${WHATS_DISH_BASE_URL}/api/auth/login-with-sms-trigger`, {
-      to: phoneNumber,
+    const phoneNumber = req.body.phoneNumber || req.body.phone;
+    if (!phoneNumber) {
+      return res.status(400).json({ error: 'Phone number is required.' });
+    }
+
+    log(`Sending verification code to: ${phoneNumber}`);
+
+    const response = await axios.post(`${WHATS_DISH_BASE_URL}/api/auth/login-with-sms-trigger`, {
+      to: phoneNumber
+    }, {
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      timeout: 10000
     });
+    
+    log('Verification code sent successfully');
     res.status(200).json({ message: 'Verification code sent!' });
   } catch (err) {
-    if (isDev) console.error(`[DEV ERROR] Failed to send verification code: ${err.message}`);
+    logError(`Failed to send verification code: ${err.message}`, err);
     res.status(500).json({ error: 'Failed to send verification code' });
   }
 });
 
-app.post('/api/verify-code', async (req, res) => {
-  const phoneNumber = req.body.phoneNumber || req.body.phone;
-  const code = req.body.code;
-  
-  if (!phoneNumber || !code) {
-    return res.status(400).json({ error: 'Phone number and code are required.' });
-  }
-
-  if (isDev) console.log(`[DEV LOG] Verifying code for: ${phoneNumber}, Code: ${code}`);
-
+app.post('/api/verify-code', async (req, res, next) => {
   try {
-    const ipResponse = await axios.get('https://checkip.amazonaws.com/');
-    const userIp = ipResponse.data.trim();
+    const phoneNumber = req.body.phoneNumber || req.body.phone;
+    const code = req.body.code;
     
-    if (isDev) console.log(`[DEV LOG] Detected user IP: ${userIp}`);
+    if (!phoneNumber || !code) {
+      return res.status(400).json({ error: 'Phone number and code are required.' });
+    }
+
+    log(`Verifying code for: ${phoneNumber}, Code: ${code}`);
+
+    // Get user IP address
+    let userIp;
+    try {
+      const ipResponse = await axios.get('https://checkip.amazonaws.com/');
+      userIp = ipResponse.data.trim();
+      log(`Detected user IP: ${userIp}`);
+    } catch (ipError) {
+      logError('Failed to get IP address', ipError);
+      userIp = req.ip || '127.0.0.1'; // Fallback to request IP or localhost
+      log(`Using fallback IP: ${userIp}`);
+    }
 
     const response = await axios.post(`${WHATS_DISH_BASE_URL}/api/auth/login-with-sms-verify`, {
       to: phoneNumber,
       code: code,
       Ip: userIp,
       lang: 'en',
+    }, {
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      timeout: 10000
     });
     
     if (response?.data?.result?.token) {
-      if (isDev) console.log(`[DEV LOG] Verification success, Token received.`);
-      res.status(200).json({ message: 'Login successful!', token: response.data.result.token });
+      log('Verification success, Token received');
+      res.status(200).json({ 
+        message: 'Login successful!', 
+        token: response.data.result.token 
+      });
     } else {
-      if (isDev) console.error(`[DEV ERROR] Failed to retrieve token.`);
+      logError('Failed to retrieve token');
       res.status(400).json({ error: 'Failed to retrieve token.' });
     }
   } catch (err) {
-    if (isDev) console.error(`[DEV ERROR] Invalid verification code: ${err.message}`);
+    logError(`Invalid verification code: ${err.message}`, err);
     res.status(400).json({ error: 'Invalid verification code' });
   }
 });
 
-app.get('/api/user/profile', async (req, res) => {
+// Helper function to handle API requests with authentication
+async function makeAuthenticatedRequest(url, method, token, body = null) {
+  try {
+    const options = {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      }
+    };
+
+    if (body && (method === 'POST' || method === 'PUT')) {
+      options.body = JSON.stringify(body);
+    }
+
+    const response = await fetch(url, options);
+    const data = await response.json();
+
+    if (!response.ok) {
+      const error = new Error(data.message || 'API request failed');
+      error.status = response.status;
+      error.data = data;
+      throw error;
+    }
+
+    return data;
+  } catch (error) {
+    throw error;
+  }
+}
+
+app.get('/api/user/profile', async (req, res, next) => {
   try {
     const token = req.headers['authorization']?.split(' ')[1];
 
     if (!token) {
-      if (isDev) console.log('[DEV ERROR] Token is required');
-      return res.status(401).json({ message: 'Token is required' });
+      logError('Token is required');
+      return res.status(401).json({ error: 'Token is required' });
     }
 
-    if (isDev) console.log('[DEV LOG] Token received:', token);
+    log(`Token received: ${maskToken(token)}`);
 
-    const response = await fetch(`${WHATS_DISH_BASE_URL}/api/rn/profile`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-
-    if (isDev) console.log('[DEV LOG] Profile Data:', data);
-
-    if (!response.ok) {
-      return res.status(response.status).json(data);
+    try {
+      const url = `${WHATS_DISH_BASE_URL}/api/rn/profile`;
+      const data = await makeAuthenticatedRequest(url, 'GET', token);
+      log('Profile Data fetched successfully');
+      res.json(data);
+    } catch (error) {
+      const statusCode = error.status || 500;
+      logError(`Error fetching profile: ${error.message}`, error);
+      res.status(statusCode).json({ error: error.message || 'Error fetching profile' });
     }
-    return res.json(data);
-  } catch (error) {
-    if (isDev) console.error('[DEV ERROR] Internal server error:', error);
-    return res.status(500).json({ message: 'Internal server error' });
+  } catch (err) {
+    next(err);
   }
 });
 
-app.get('/fetch-menu', async (req, res) => {
+app.get('/fetch-menu', async (req, res, next) => {
   try {
     const restaurantId = req.query.restaurantId;
     if (!restaurantId) {
-      if (isDev) console.log('[DEV ERROR] Missing restaurantId parameter');
+      logError('Missing restaurantId parameter');
       return res.status(400).json({ error: 'Missing restaurantId parameter' });
     }
 
-    if (isDev) console.log('[DEV LOG] Fetching menu for restaurantId:', restaurantId);
+    log(`Fetching menu for restaurantId: ${restaurantId}`);
 
     const token = req.headers['authorization']?.split(' ')[1];
 
     if (!token) {
-      if (isDev) console.log('[DEV ERROR] Unauthorized: Missing token');
+      logError('Unauthorized: Missing token');
       return res.status(401).json({ error: 'Unauthorized: Missing token' });
     }
 
-    if (isDev) console.log('[DEV LOG] Token received:', token);
+    log(`Token received: ${maskToken(token)}`);
 
     const apiUrl = `${WHATS_DISH_BASE_URL}/api/rn/merchants/${restaurantId}`;
-    if (isDev) console.log('[DEV LOG] API URL:', apiUrl);
+    log(`API URL: ${apiUrl}`);
 
-    const response = await fetch(apiUrl, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`API request failed with status ${response.status}`);
+    try {
+      const data = await makeAuthenticatedRequest(apiUrl, 'GET', token);
+      log(`Menu Data fetched successfully for restaurantId: ${restaurantId}`);
+      res.json(data);
+    } catch (error) {
+      const statusCode = error.status || 500;
+      logError(`Error fetching menu: ${error.message}`, error);
+      res.status(statusCode).json({ error: error.message || 'Error fetching menu' });
     }
-
-    const data = await response.json();
-    if (isDev) console.log('[DEV LOG] Menu Data:', data);
-    res.json(data);
-  } catch (error) {
-    if (isDev) console.error('[DEV ERROR] Error fetching menu:', error);
-    res.status(500).json({ error: error.message });
+  } catch (err) {
+    next(err);
   }
 });
 
-app.get('/api/profile/payment-methods', async (req, res) => {
+app.get('/api/profile/payment-methods', async (req, res, next) => {
   try {
     const token = req.headers['authorization']?.split(' ')[1];
 
     if (!token) {
-      if (isDev) console.log('[DEV ERROR] Token is required');
-      return res.status(401).json({ message: 'Token is required' });
+      logError('Token is required');
+      return res.status(401).json({ error: 'Token is required' });
     }
 
-    const response = await fetch(`${WHATS_DISH_BASE_URL}/api/profile/payment-methods`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-    });
+    log(`Token received: ${maskToken(token)}`);
 
-    const data = await response.json();
-
-    if (!response.ok) {
-      return res.status(response.status).json(data);
+    try {
+      const url = `${WHATS_DISH_BASE_URL}/api/profile/payment-methods`;
+      const data = await makeAuthenticatedRequest(url, 'GET', token);
+      log('Payment Methods Data fetched successfully');
+      res.json(data);
+    } catch (error) {
+      const statusCode = error.status || 500;
+      logError(`Error fetching payment methods: ${error.message}`, error);
+      res.status(statusCode).json({ error: error.message || 'Error fetching payment methods' });
     }
-
-    if (isDev) console.log('[DEV LOG] Payment Methods Data:', data);
-
-    return res.json(data);
-  } catch (error) {
-    if (isDev) console.error('[DEV ERROR] Internal server error:', error);
-    return res.status(500).json({ message: 'Internal server error' });
+  } catch (err) {
+    next(err);
   }
 });
 
-app.post('/api/payments/m/cof', async (req, res) => {
+app.post('/api/payments/m/cof', async (req, res, next) => {
   try {
     const token = req.headers['authorization']?.split(' ')[1];
     const cardInfo = req.body;
 
     if (!token) {
-      return res.status(401).json({ message: 'Token is required' });
+      return res.status(401).json({ error: 'Token is required' });
     }
 
     if (!cardInfo) {
-      return res.status(400).json({ message: 'Card information is required' });
+      return res.status(400).json({ error: 'Card information is required' });
     }
 
-    const response = await fetch(`${WHATS_DISH_BASE_URL}/api/payments/m/cof`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(cardInfo),
-    });
+    log(`Adding new payment method, token: ${maskToken(token)}`);
 
-    const newCard = await response.json();
-    if (!response.ok) {
-      return res.status(response.status).json(newCard);
+    try {
+      const url = `${WHATS_DISH_BASE_URL}/api/payments/m/cof`;
+      const data = await makeAuthenticatedRequest(url, 'POST', token, cardInfo);
+      log('Payment method added successfully');
+      res.json(data);
+    } catch (error) {
+      const statusCode = error.status || 500;
+      logError(`Error adding payment method: ${error.message}`, error);
+      res.status(statusCode).json({ error: error.message || 'Error adding payment method' });
     }
-
-    return res.json(newCard);
-  } catch (error) {
-    console.error('Error saving card:', error);
-    res.status(500).json({ message: 'Internal server error' });
+  } catch (err) {
+    next(err);
   }
 });
 
-app.delete('/api/profile/payment-methods/:cardId', async (req, res) => {
+app.delete('/api/profile/payment-methods/:cardId', async (req, res, next) => {
   try {
     const token = req.headers['authorization']?.split(' ')[1];
     const { cardId } = req.params;
 
     if (!token) {
-      return res.status(401).json({ message: 'Token is required' });
+      return res.status(401).json({ error: 'Token is required' });
     }
 
-    const response = await fetch(`${WHATS_DISH_BASE_URL}/api/profile/payment-methods/${cardId}`, {
-      method: 'DELETE',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-    });
+    log(`Deleting payment method with ID: ${cardId}, token: ${maskToken(token)}`);
 
-    const result = await response.json();
-    if (!response.ok) {
-      return res.status(response.status).json(result);
+    try {
+      const url = `${WHATS_DISH_BASE_URL}/api/profile/payment-methods/${cardId}`;
+      const data = await makeAuthenticatedRequest(url, 'DELETE', token);
+      log('Payment method deleted successfully');
+      res.json(data);
+    } catch (error) {
+      const statusCode = error.status || 500;
+      logError(`Error deleting payment method: ${error.message}`, error);
+      res.status(statusCode).json({ error: error.message || 'Error deleting payment method' });
     }
-
-    return res.json(result);
-  } catch (error) {
-    console.error('Error removing card:', error);
-    res.status(500).json({ message: 'Internal server error' });
+  } catch (err) {
+    next(err);
   }
 });
 
-app.get('/api/restaurants/:restaurantId', async (req, res) => {
+app.get('/api/restaurants/:restaurantId', async (req, res, next) => {
   try {
     const token = req.headers['authorization']?.split(' ')[1];
     const { restaurantId } = req.params;
 
     if (!token) {
-      return res.status(401).json({ message: 'Token is required' });
+      return res.status(401).json({ error: 'Token is required' });
     }
 
-    console.log(`[Backend Log] Restaurant ID received: ${restaurantId}`);
+    log(`Restaurant ID received: ${restaurantId}, token: ${maskToken(token)}`);
 
-    const url = `${WHATS_DISH_BASE_URL}/api/rn/merchants/${restaurantId}`;
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      return res.status(response.status).json(data);
+    try {
+      const url = `${WHATS_DISH_BASE_URL}/api/rn/merchants/${restaurantId}`;
+      const data = await makeAuthenticatedRequest(url, 'GET', token);
+      log(`Restaurant details fetched successfully for ID: ${restaurantId}`);
+      res.json(data);
+    } catch (error) {
+      const statusCode = error.status || 500;
+      logError(`Error fetching restaurant details: ${error.message}`, error);
+      res.status(statusCode).json({ error: error.message || 'Error fetching restaurant details' });
     }
-
-    return res.json(data);
-  } catch (error) {
-    console.error('Error fetching restaurant details:', error);
-    return res.status(500).json({ message: 'Internal server error' });
+  } catch (err) {
+    next(err);
   }
 });
 
+// Apply error handler middleware
+app.use(errorHandler);
 
+// Start the server
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Application specific logging, throwing an error, or other logic here
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+  // Application specific logging, throwing an error, or other logic here
+  // In production, you might want to gracefully restart the server
+  if (!isDev) {
+    process.exit(1);
+  }
 });
