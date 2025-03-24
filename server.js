@@ -106,113 +106,78 @@ app.get('/api/restaurants', async (req, res, next) => {
   }
 });
 
-app.post('/api/send-code', async (req, res, next) => {
+app.post('/api/send-code', async (req, res) => {
+  const phoneNumber = req.body.phoneNumber || req.body.phone;
+
+  if (!phoneNumber) {
+    console.error('[ERROR] Phone number missing in request body:', req.body);
+    return res.status(400).json({ error: 'Phone number is required.' });
+  }
+
+  console.log('[INFO] Received request to send verification code');
+  console.log('[INFO] Phone Number:', phoneNumber);
+
   try {
-    const phoneNumber = req.body.phoneNumber || req.body.phone;
-    if (!phoneNumber) {
-      return res.status(400).json({ error: 'Phone number is required.' });
-    }
-
-    log(`Sending verification code to: ${phoneNumber}`);
-
-    const response = await axios.post(`${WHATS_DISH_BASE_URL}/api/auth/login-with-sms-trigger`, {
-      to: phoneNumber
-    }, {
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      timeout: 10000
+    const result = await axios.post(`${WHATS_DISH_BASE_URL}/api/auth/login-with-sms-trigger`, {
+      to: phoneNumber,
     });
-    
-    log('Verification code sent successfully');
+
+    console.log('[SUCCESS] Verification code sent successfully:', result.data);
     res.status(200).json({ message: 'Verification code sent!' });
   } catch (err) {
-    logError(`Failed to send verification code: ${err.message}`, err);
+    console.error('[ERROR] Failed to send verification code:', err.message);
+    if (err.response) {
+      console.error('[ERROR] Response Status:', err.response.status);
+      console.error('[ERROR] Response Data:', err.response.data);
+    }
     res.status(500).json({ error: 'Failed to send verification code' });
   }
 });
 
-app.post('/api/verify-code', async (req, res, next) => {
+app.post('/api/verify-code', async (req, res) => {
+  const phoneNumber = req.body.phoneNumber || req.body.phone;
+  const code = req.body.code;
+
+  if (!phoneNumber || !code) {
+    console.error('[ERROR] Missing phone or code in request body:', req.body);
+    return res.status(400).json({ error: 'Phone number and code are required.' });
+  }
+
+  console.log('[INFO] Starting verification...');
+  console.log('[INFO] Phone:', phoneNumber, 'Code:', code);
+
   try {
-    const phoneNumber = req.body.phoneNumber || req.body.phone;
-    const code = req.body.code;
-    
-    if (!phoneNumber || !code) {
-      return res.status(400).json({ error: 'Phone number and code are required.' });
-    }
+    const ipResponse = await axios.get('https://checkip.amazonaws.com/');
+    const userIp = ipResponse.data.trim();
 
-    log(`Verifying code for: ${phoneNumber}, Code: ${code}`);
-
-    // Get user IP address
-    let userIp;
-    try {
-      const ipResponse = await axios.get('https://checkip.amazonaws.com/');
-      userIp = ipResponse.data.trim();
-      log(`Detected user IP: ${userIp}`);
-    } catch (ipError) {
-      logError('Failed to get IP address', ipError);
-      userIp = req.ip || '127.0.0.1'; // Fallback to request IP or localhost
-      log(`Using fallback IP: ${userIp}`);
-    }
+    console.log('[INFO] User IP detected:', userIp);
 
     const response = await axios.post(`${WHATS_DISH_BASE_URL}/api/auth/login-with-sms-verify`, {
       to: phoneNumber,
       code: code,
       Ip: userIp,
       lang: 'en',
-    }, {
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      timeout: 10000
     });
-    
+
+    console.log('[INFO] Response from login-with-sms-verify:', response.data);
+
     if (response?.data?.result?.token) {
-      log('Verification success, Token received');
-      res.status(200).json({ 
-        message: 'Login successful!', 
-        token: response.data.result.token 
-      });
+      console.log('[SUCCESS] Verification successful. Token received.');
+      res.status(200).json({ message: 'Login successful!', token: response.data.result.token });
     } else {
-      logError('Failed to retrieve token');
+      console.error('[ERROR] Token not found in response:', response.data);
       res.status(400).json({ error: 'Failed to retrieve token.' });
     }
   } catch (err) {
-    logError(`Invalid verification code: ${err.message}`, err);
+    console.error('[ERROR] Verification failed:', err.message);
+    if (err.response) {
+      console.error('[ERROR] Response Status:', err.response.status);
+      console.error('[ERROR] Response Data:', err.response.data);
+    }
     res.status(400).json({ error: 'Invalid verification code' });
   }
 });
 
-// Helper function to handle API requests with authentication
-async function makeAuthenticatedRequest(url, method, token, body = null) {
-  try {
-    const options = {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      }
-    };
-
-    if (body && (method === 'POST' || method === 'PUT')) {
-      options.body = JSON.stringify(body);
-    }
-
-    const response = await fetch(url, options);
-    const data = await response.json();
-
-    if (!response.ok) {
-      const error = new Error(data.message || 'API request failed');
-      error.status = response.status;
-      error.data = data;
-      throw error;
-    }
-
-    return data;
-  } catch (error) {
-    throw error;
-  }
-}
 
 app.get('/api/user/profile', async (req, res, next) => {
   try {
